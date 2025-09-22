@@ -1,0 +1,77 @@
+# APort Webhook Management Workflow
+# This workflow manages webhook configurations for APort agents
+name: APort Webhook Management
+
+on:
+  push:
+    branches: [main, staging, dev]
+  workflow_dispatch:
+    inputs:
+      webhook_url:
+        description: "Webhook URL to set"
+        required: true
+        type: string
+      operation:
+        description: "Operation to perform"
+        required: false
+        default: "set"
+        type: choice
+        options:
+          - set
+          - get
+          - delete
+
+jobs:
+  webhook-management:
+    runs-on: ubuntu-latest
+    name: Manage Webhook Configuration
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set Production Webhook
+        if: github.ref == 'refs/heads/main'
+        uses: aporthq/webhook-manager-action@v1
+        with:
+          agent-id: ${{ secrets.APORT_AGENT_ID }}
+          webhook-url: "https://prod.example.com/webhook/aport"
+          operation: "set"
+
+      - name: Set Staging Webhook
+        if: github.ref == 'refs/heads/staging'
+        uses: aporthq/webhook-manager-action@v1
+        with:
+          agent-id: ${{ secrets.APORT_AGENT_ID }}
+          webhook-url: "https://staging.example.com/webhook/aport"
+          operation: "set"
+
+      - name: Set Development Webhook
+        if: github.ref == 'refs/heads/dev'
+        uses: aporthq/webhook-manager-action@v1
+        with:
+          agent-id: ${{ secrets.APORT_AGENT_ID }}
+          webhook-url: "https://dev.example.com/webhook/aport"
+          operation: "set"
+
+      - name: Manual Webhook Operation
+        if: github.event_name == 'workflow_dispatch'
+        uses: aporthq/webhook-manager-action@v1
+        with:
+          agent-id: ${{ secrets.APORT_AGENT_ID }}
+          webhook-url: ${{ github.event.inputs.webhook_url }}
+          operation: ${{ github.event.inputs.operation }}
+
+      - name: Get Current Webhook
+        id: get-webhook
+        uses: aporthq/webhook-manager-action@v1
+        with:
+          agent-id: ${{ secrets.APORT_AGENT_ID }}
+          operation: "get"
+
+      - name: Report Webhook Status
+        run: |
+          echo "📊 Webhook Management Results:"
+          echo "  Agent ID: ${{ secrets.APORT_AGENT_ID }}"
+          echo "  Current Webhook: ${{ steps.get-webhook.outputs.webhook_url }}"
+          echo "  Success: ${{ steps.get-webhook.outputs.success }}"

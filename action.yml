@@ -1,0 +1,161 @@
+name: "APort Webhook Manager"
+description: "Manage webhook configurations for APort agents"
+author: "APort Team"
+branding:
+  icon: "webhook"
+  color: "blue"
+
+inputs:
+  agent-id:
+    description: "The APort Agent ID to manage webhooks for."
+    required: true
+  webhook-url:
+    description: "The webhook URL to set for the agent."
+    required: true
+  api-base:
+    description: "The base URL for the APort API."
+    required: false
+    default: "https://api.aport.io"
+  operation:
+    description: "Operation to perform (set, get, delete)."
+    required: false
+    default: "set"
+    type: choice
+    options:
+      - set
+      - get
+      - delete
+  github-token:
+    description: "GitHub token for webhook operations."
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  webhook_url:
+    description: "The current webhook URL for the agent."
+    value: ${{ steps.webhook-manager.outputs.webhook_url }}
+  success:
+    description: "Boolean indicating if the operation was successful."
+    value: ${{ steps.webhook-manager.outputs.success }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Manage webhook
+      id: webhook-manager
+      env:
+        APORT_API_BASE: ${{ inputs.api-base }}
+        APORT_AGENT_ID: ${{ inputs.agent-id }}
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        OPERATION: ${{ inputs.operation }}
+      run: |
+        echo "🔧 Managing webhook for agent: $APORT_AGENT_ID"
+        echo "Operation: $OPERATION"
+
+        case "$OPERATION" in
+          "set")
+            echo "📤 Setting webhook URL: $WEBHOOK_URL"
+            
+            # Create webhook payload
+            WEBHOOK_PAYLOAD=$(jq -n \
+              --arg target "agent" \
+              --arg target_id "$APORT_AGENT_ID" \
+              --arg agent_id "$APORT_AGENT_ID" \
+              --arg url "$WEBHOOK_URL" \
+              --arg secret "$(openssl rand -hex 32)" \
+              --argjson events '["status.changed", "passport.updated", "assurance.updated"]' \
+              --argjson active true \
+              --argjson retry_attempts 3 \
+              --argjson timeout_ms 5000 \
+              '{target:$target, target_id:$target_id, agent_id:$agent_id, url:$url, secret:$secret, events:$events, active:$active, retry_attempts:$retry_attempts, timeout_ms:$timeout_ms}')
+            
+            # Create webhook
+            RESPONSE=$(curl -s -X POST "$APORT_API_BASE/api/webhooks" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer ${{ secrets.APORT_TOKEN }}" \
+              -d "$WEBHOOK_PAYLOAD")
+            
+            if [ $? -eq 0 ] && echo "$RESPONSE" | jq -e '.ok' > /dev/null; then
+              WEBHOOK_ID=$(echo "$RESPONSE" | jq -r '.webhook.webhook_id')
+              echo "✅ Webhook created successfully (ID: $WEBHOOK_ID)"
+              echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
+              echo "success=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Failed to create webhook: $RESPONSE"
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+            ;;
+          "get")
+            echo "📥 Getting current webhook URL"
+            
+            # List webhooks for agent
+            RESPONSE=$(curl -s -X GET "$APORT_API_BASE/api/webhooks?target=agent&target_id=$APORT_AGENT_ID" \
+              -H "Authorization: Bearer ${{ secrets.APORT_TOKEN }}")
+            
+            if [ $? -eq 0 ]; then
+              WEBHOOK_URL=$(echo "$RESPONSE" | jq -r '.webhooks[0].url // ""')
+              if [ -n "$WEBHOOK_URL" ] && [ "$WEBHOOK_URL" != "null" ]; then
+                echo "✅ Found webhook: $WEBHOOK_URL"
+                echo "webhook_url=$WEBHOOK_URL" >> $GITHUB_OUTPUT
+                echo "success=true" >> $GITHUB_OUTPUT
+              else
+                echo "ℹ️ No webhook found for agent"
+                echo "webhook_url=" >> $GITHUB_OUTPUT
+                echo "success=true" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "❌ Failed to get webhook: $RESPONSE"
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+            ;;
+          "delete")
+            echo "🗑️ Deleting webhook"
+            
+            # First get webhook ID
+            RESPONSE=$(curl -s -X GET "$APORT_API_BASE/api/webhooks?target=agent&target_id=$APORT_AGENT_ID" \
+              -H "Authorization: Bearer ${{ secrets.APORT_TOKEN }}")
+            
+            if [ $? -eq 0 ]; then
+              WEBHOOK_ID=$(echo "$RESPONSE" | jq -r '.webhooks[0].webhook_id // ""')
+              if [ -n "$WEBHOOK_ID" ] && [ "$WEBHOOK_ID" != "null" ]; then
+                # Delete webhook
+                DELETE_RESPONSE=$(curl -s -X DELETE "$APORT_API_BASE/api/webhooks/$WEBHOOK_ID" \
+                  -H "Authorization: Bearer ${{ secrets.APORT_TOKEN }}")
+                
+                if [ $? -eq 0 ]; then
+                  echo "✅ Webhook deleted successfully"
+                  echo "webhook_url=" >> $GITHUB_OUTPUT
+                  echo "success=true" >> $GITHUB_OUTPUT
+                else
+                  echo "❌ Failed to delete webhook: $DELETE_RESPONSE"
+                  echo "success=false" >> $GITHUB_OUTPUT
+                  exit 1
+                fi
+              else
+                echo "ℹ️ No webhook found to delete"
+                echo "webhook_url=" >> $GITHUB_OUTPUT
+                echo "success=true" >> $GITHUB_OUTPUT
+              fi
+            else
+              echo "❌ Failed to get webhook for deletion: $RESPONSE"
+              echo "success=false" >> $GITHUB_OUTPUT
+              exit 1
+            fi
+            ;;
+          *)
+            echo "❌ Unknown operation: $OPERATION"
+            echo "success=false" >> $GITHUB_OUTPUT
+            exit 1
+            ;;
+        esac
+      shell: bash
+
+    - name: Report results
+      run: |
+        echo "📊 Webhook Management Results:"
+        echo "  Agent ID: ${{ inputs.agent-id }}"
+        echo "  Operation: ${{ inputs.operation }}"
+        echo "  Webhook URL: ${{ steps.webhook-manager.outputs.webhook_url }}"
+        echo "  Success: ${{ steps.webhook-manager.outputs.success }}"
