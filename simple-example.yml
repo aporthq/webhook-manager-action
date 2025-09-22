@@ -1,0 +1,15 @@
+# Simple APort Webhook Management
+# Copy this to your .github/workflows/ directory
+
+name: APort Webhook Setup
+on: [workflow_dispatch]
+
+jobs:
+  webhook-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aporthq/webhook-manager-action@v1
+        with:
+          agent-id: ${{ secrets.APORT_AGENT_ID }}
+          webhook-url: "https://your-webhook-endpoint.com/webhook"
+          operation: "set"
